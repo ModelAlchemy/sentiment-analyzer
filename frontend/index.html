@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentiment Analyzer</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #f8fafc; --surface: #ffffff; --border: #e2e8f0;
+      --text: #1a202c; --muted: #718096; --accent: #5a67d8;
+      --pos: #38a169; --neg: #e53e3e; --neu: #d69e2e;
+      --pos-bg: #f0fff4; --neg-bg: #fff5f5; --neu-bg: #fffff0;
+      --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: var(--bg); color: var(--text); min-height: 100vh; }
+    #root { max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback, useRef } = React;
+
+const API = "http://localhost:8000";
+
+const SAMPLES = [
+  "This movie was absolutely fantastic! The acting was superb and the plot kept me on the edge of my seat.",
+  "Terrible experience. The product broke after one day and customer service was completely useless.",
+  "It's okay. Nothing special but gets the job done. Average quality for the price.",
+  "I can't believe how amazing this restaurant is! Best meal I've ever had in my life!",
+  "The hotel was dirty, the staff was rude, and the location was noisy. Total waste of money.",
+];
+
+const EMOJI = { POSITIVE: "😊", NEGATIVE: "😞", NEUTRAL: "😐" };
+const COLOR = { POSITIVE: "var(--pos)", NEGATIVE: "var(--neg)", NEUTRAL: "var(--neu)" };
+const BG    = { POSITIVE: "var(--pos-bg)", NEGATIVE: "var(--neg-bg)", NEUTRAL: "var(--neu-bg)" };
+
+function ConfidenceBar({ value, color }) {
+  return (
+    <div style={{ background: "#edf2f7", borderRadius: 4, height: 8, overflow: "hidden", margin: "6px 0" }}>
+      <div style={{
+        width: `${Math.round(value * 100)}%`, height: "100%",
+        background: color, borderRadius: 4,
+        transition: "width 0.6s cubic-bezier(.4,0,.2,1)"
+      }} />
+    </div>
+  );
+}
+
+function ModelCard({ result, isWinner }) {
+  const color = COLOR[result.label];
+  const bg    = BG[result.label];
+  return (
+    <div style={{
+      background: var(--surface), border: `${isWinner ? "2px" : "1px"} solid ${isWinner ? color : "var(--border)"}`,
+      borderRadius: var(--radius), padding: "1rem 1.2rem", flex: 1,
+      boxShadow: isWinner ? `0 0 0 3px ${bg}` : "var(--shadow)",
+      transition: "all 0.3s ease", position: "relative",
+    }}>
+      {isWinner && (
+        <span style={{
+          position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)",
+          background: color, color: "#fff", fontSize: 10, fontWeight: 700,
+          padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap",
+        }}>BEST MATCH</span>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <span style={{ fontWeight: 600, fontSize: 13, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          {result.model_name === "bert" ? "DistilBERT" : result.model_name === "textblob" ? "TextBlob" : "VADER"}
+        </span>
+        <span style={{ fontSize: 11, color: "var(--muted)" }}>{result.latency_ms}ms</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 28 }}>{EMOJI[result.label]}</span>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 16, color }}>{result.label}</div>
+          <div style={{ fontSize: 13, color: "var(--muted)" }}>{Math.round(result.confidence * 100)}% confident</div>
+        </div>
+      </div>
+      <ConfidenceBar value={result.confidence} color={color} />
+      <div style={{ marginTop: 10 }}>
+        {Object.entries(result.scores).slice(0, 3).map(([k, v]) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--muted)", padding: "2px 0" }}>
+            <span style={{ textTransform: "capitalize" }}>{k}</span>
+            <span style={{ fontFamily: "monospace" }}>{typeof v === "number" ? v.toFixed(3) : v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HistoryItem({ item, onClick }) {
+  const color = COLOR[item.consensus];
+  return (
+    <div onClick={() => onClick(item.text)}
+      style={{
+        padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)",
+        cursor: "pointer", background: "var(--surface)", marginBottom: 6,
+        display: "flex", alignItems: "center", gap: 10,
+        transition: "border-color 0.15s",
+      }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = color}
+      onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}
+    >
+      <span style={{ fontSize: 16 }}>{EMOJI[item.consensus]}</span>
+      <span style={{ fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {item.text}
+      </span>
+      <span style={{ fontSize: 11, color, fontWeight: 600, whiteSpace: "nowrap" }}>{item.consensus}</span>
+    </div>
+  );
+}
+
+function App() {
+  const [text, setText]       = useState("");
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
+  const [history, setHistory] = useState([]);
+  const [useDemo, setUseDemo] = useState(false);
+  const textRef = useRef();
+
+  const analyze = useCallback(async (inputText) => {
+    const t = (inputText || text).trim();
+    if (!t) return;
+    setLoading(true); setError(null); setResults(null);
+
+    try {
+      let data;
+      if (useDemo || !inputText) {
+        // Demo mode: simulate API response locally
+        await new Promise(r => setTimeout(r, 600));
+        data = simulateAnalysis(t);
+      } else {
+        const res = await fetch(`${API}/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: t }),
+        });
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+        data = await res.json();
+      }
+      setResults(data);
+      setHistory(h => [{ text: t.slice(0, 60) + (t.length > 60 ? "…" : ""), consensus: data.consensus }, ...h.slice(0, 9)]);
+    } catch (e) {
+      setError("Could not reach the API. Running in demo mode.");
+      const data = simulateAnalysis(t);
+      setResults(data);
+      setHistory(h => [{ text: t.slice(0, 60) + (t.length > 60 ? "…" : ""), consensus: data.consensus }, ...h.slice(0, 9)]);
+    } finally {
+      setLoading(false);
+    }
+  }, [text, useDemo]);
+
+  const exportCSV = () => {
+    if (!history.length) return;
+    const csv = ["text,sentiment\n", ...history.map(h => `"${h.text}",${h.consensus}\n`)].join("");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = "sentiment_results.csv";
+    a.click();
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+        <h1 style={{ fontSize: 32, fontWeight: 800, color: "var(--accent)", marginBottom: 6 }}>
+          🧠 Sentiment Analyzer
+        </h1>
+        <p style={{ color: "var(--muted)", fontSize: 15 }}>
+          Compare DistilBERT · TextBlob · VADER side-by-side
+        </p>
+      </div>
+
+      {/* Main card */}
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "1.5rem", boxShadow: "var(--shadow)", marginBottom: "1.5rem" }}>
+        {/* Sample buttons */}
+        <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center", marginRight: 4 }}>Try a sample:</span>
+          {["Positive", "Negative", "Neutral"].map((label, i) => (
+            <button key={label}
+              onClick={() => { setText(SAMPLES[i]); setTimeout(() => analyze(SAMPLES[i]), 50); }}
+              style={{
+                fontSize: 12, padding: "4px 10px", borderRadius: 99,
+                border: "1px solid var(--border)", cursor: "pointer",
+                background: i === 0 ? "var(--pos-bg)" : i === 1 ? "var(--neg-bg)" : "var(--neu-bg)",
+                color: i === 0 ? "var(--pos)" : i === 1 ? "var(--neg)" : "var(--neu)",
+                fontWeight: 600,
+              }}
+            >{label}</button>
+          ))}
+        </div>
+
+        {/* Text area */}
+        <textarea
+          ref={textRef}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) analyze(); }}
+          placeholder="Type or paste text here… (Ctrl+Enter to analyze)"
+          style={{
+            width: "100%", minHeight: 120, padding: "12px 14px",
+            border: "1px solid var(--border)", borderRadius: 8,
+            fontSize: 15, resize: "vertical", lineHeight: 1.6,
+            fontFamily: "inherit", outline: "none",
+            transition: "border-color 0.2s",
+          }}
+          onFocus={e => e.target.style.borderColor = "var(--accent)"}
+          onBlur={e => e.target.style.borderColor = "var(--border)"}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+          <span style={{ fontSize: 12, color: text.length > 4500 ? "var(--neg)" : "var(--muted)" }}>
+            {text.length} / 5000 characters
+          </span>
+          <button
+            onClick={() => analyze()}
+            disabled={loading || !text.trim()}
+            style={{
+              padding: "10px 24px", borderRadius: 8, border: "none",
+              background: text.trim() ? "var(--accent)" : "var(--border)",
+              color: text.trim() ? "#fff" : "var(--muted)",
+              fontWeight: 700, fontSize: 15, cursor: text.trim() ? "pointer" : "default",
+              transition: "all 0.2s", transform: loading ? "scale(0.97)" : "scale(1)",
+            }}
+          >
+            {loading ? "Analyzing…" : "Analyze ✨"}
+          </button>
+        </div>
+      </div>
+
+      {/* Error banner */}
+      {error && (
+        <div style={{ background: "var(--neu-bg)", border: "1px solid var(--neu)", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "var(--neu)", marginBottom: 16 }}>
+          ⚠️ {error}
+        </div>
+      )}
+
+      {/* Results */}
+      {results && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          {/* Consensus banner */}
+          <div style={{
+            background: BG[results.consensus], border: `1px solid ${COLOR[results.consensus]}`,
+            borderRadius: "var(--radius)", padding: "1rem 1.5rem", marginBottom: 16,
+            display: "flex", alignItems: "center", gap: 12,
+          }}>
+            <span style={{ fontSize: 36 }}>{EMOJI[results.consensus]}</span>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 20, color: COLOR[results.consensus] }}>
+                {results.consensus} SENTIMENT
+              </div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                Consensus of {results.results.length} models · {results.processing_time_ms}ms total
+              </div>
+            </div>
+          </div>
+
+          {/* Model cards */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {results.results.map(r => (
+              <ModelCard
+                key={r.model_name}
+                result={r}
+                isWinner={r.confidence === Math.max(...results.results.map(x => x.confidence))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* History */}
+      {history.length > 0 && (
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "1.2rem", boxShadow: "var(--shadow)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Recent Analyses
+            </h3>
+            <button onClick={exportCSV}
+              style={{ fontSize: 12, padding: "4px 10px", borderRadius: 99, border: "1px solid var(--border)", cursor: "pointer", background: "transparent", color: "var(--accent)", fontWeight: 600 }}>
+              Export CSV ↓
+            </button>
+          </div>
+          {history.map((item, i) => (
+            <HistoryItem key={i} item={item} onClick={t => { setText(t); analyze(t); }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Demo mode: rule-based simulation when no backend running
+function simulateAnalysis(text) {
+  const t = text.toLowerCase();
+  const posWords = ['great','good','excellent','amazing','fantastic','love','wonderful','best','perfect','happy','superb','brilliant','outstanding','beautiful','enjoyed'];
+  const negWords = ['bad','terrible','awful','horrible','worst','hate','poor','disappointing','boring','ugly','dreadful','useless','waste','broken','failed'];
+  const pos = posWords.filter(w => t.includes(w)).length;
+  const neg = negWords.filter(w => t.includes(w)).length;
+
+  const getConf = (count, other) => Math.min(0.52 + count * 0.08 - other * 0.04, 0.97);
+  const label = pos > neg ? "POSITIVE" : neg > pos ? "NEGATIVE" : "NEUTRAL";
+
+  const makeResult = (name, jitter) => {
+    const base = pos > neg ? "POSITIVE" : neg > pos ? "NEGATIVE" : "NEUTRAL";
+    const conf = parseFloat((getConf(Math.max(pos,neg), Math.min(pos,neg)) + jitter).toFixed(3));
+    return {
+      model_name: name, label: base, confidence: Math.min(Math.max(conf, 0.5), 0.97),
+      scores: { POSITIVE: base === "POSITIVE" ? conf : +(1-conf).toFixed(3), NEGATIVE: base === "NEGATIVE" ? conf : +(1-conf).toFixed(3) },
+      latency_ms: Math.round(20 + Math.random() * 180),
+    };
+  };
+
+  return {
+    text, consensus: label,
+    processing_time_ms: Math.round(150 + Math.random() * 200),
+    results: [
+      makeResult("bert", 0),
+      makeResult("textblob", (Math.random() - 0.5) * 0.1),
+      makeResult("vader", (Math.random() - 0.5) * 0.08),
+    ],
+  };
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
